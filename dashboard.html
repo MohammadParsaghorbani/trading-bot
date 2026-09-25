@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trading Bot Dashboard</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --border: #e3e5e9;
+    --accent: #3b82f6;
+    --green: #26a69a;
+    --red: #ef5350;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --text: #e7e9ee;
+      --muted: #9aa1ad;
+      --border: #2a2e37;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --text: #e7e9ee;
+    --muted: #9aa1ad;
+    --border: #2a2e37;
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); height: 100%; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Tahoma, Vazirmatn, sans-serif;
+    min-height: 100%;
+  }
+  header {
+    padding: 16px 20px calc(12px + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=file] {
+    color: var(--text);
+    font-size: 13px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 16px 20px 40px; }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 80px 20px;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .stat .value { font-size: 18px; font-weight: 600; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+  .panel h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px 4px; font-weight: 500; }
+  canvas { display: block; width: 100%; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin: 6px 4px 0; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Trading Bot Dashboard</h1>
+  <div class="controls">
+    <input type="file" id="fileInput" accept="application/json">
+  </div>
+</header>
+<div class="container" id="container">
+  <div class="empty" id="emptyState">
+    فایل <code>outputs/backtest_data.json</code> رو که اسکریپت پایتون تولید کرده انتخاب کن<br>
+    تا کندل‌ها، معاملات و منحنی سرمایه نمایش داده بشه.
+  </div>
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const container = document.getElementById('container');
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      render(data);
+    } catch (err) {
+      container.innerHTML = '<div class="empty">فایل JSON معتبر نیست: ' + err.message + '</div>';
+    }
+  };
+  reader.readAsText(file);
+});
+
+function fmt(n, digits = 2) {
+  if (n === null || n === undefined || isNaN(n)) return '-';
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+function render(data) {
+  const { candles, trades, equity, stats } = data;
+  container.innerHTML = `
+    <div class="stats-grid" id="statsGrid"></div>
+    <div class="panel">
+      <h2>نمودار کندل + معاملات</h2>
+      <canvas id="candleCanvas" height="360"></canvas>
+      <div class="legend">
+        <span><span class="dot" style="background:#26a69a"></span>خرید</span>
+        <span><span class="dot" style="background:#ef5350"></span>فروش</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>منحنی سرمایه (Equity)</h2>
+      <canvas id="equityCanvas" height="180"></canvas>
+    </div>
+  `;
+
+  const statsGrid = document.getElementById('statsGrid');
+  const retClass = stats.total_return_pct >= 0 ? 'pos' : 'neg';
+  const ddClass = 'neg';
+  statsGrid.innerHTML = `
+    <div class="stat"><div class="label">سرمایه نهایی</div><div class="value">$${fmt(stats.final_equity)}</div></div>
+    <div class="stat"><div class="label">بازده کل</div><div class="value ${retClass}">${fmt(stats.total_return_pct)}%</div></div>
+    <div class="stat"><div class="label">حداکثر افت (Drawdown)</div><div class="value ${ddClass}">${fmt(stats.max_drawdown_pct)}%</div></div>
+    <div class="stat"><div class="label">نسبت شارپ (تقریبی)</div><div class="value">${fmt(stats.sharpe_approx, 3)}</div></div>
+    <div class="stat"><div class="label">تعداد معاملات</div><div class="value">${stats.n_trades}</div></div>
+    <div class="stat"><div class="label">کل کارمزد</div><div class="value">$${fmt(stats.total_commission)}</div></div>
+  `;
+
+  drawCandles('candleCanvas', candles, trades);
+  drawEquity('equityCanvas', equity, stats.starting_cash);
+}
+
+function setupCanvas(id, heightCss) {
+  const canvas = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.parentElement.clientWidth - 24;
+  canvas.style.height = heightCss + 'px';
+  canvas.width = cssWidth * dpr;
+  canvas.height = heightCss * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { ctx, width: cssWidth, height: heightCss };
+}
+
+function drawCandles(id, candles, trades) {
+  const { ctx, width, height } = setupCanvas(id, 360);
+  const padL = 50, padR = 10, padT = 10, padB = 20;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const highs = candles.map(c => c.h), lows = candles.map(c => c.l);
+  const maxP = Math.max(...highs), minP = Math.min(...lows);
+  const range = (maxP - minP) || 1;
+
+  const n = candles.length;
+  const slot = plotW / n;
+  const bodyW = Math.max(1, slot * 0.6);
+
+  const yOf = p => padT + plotH - ((p - minP) / range) * plotH;
+  const xOf = i => padL + i * slot + slot / 2;
+
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--border');
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--muted');
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  const ticks = 5;
+  for (let t = 0; t <= ticks; t++) {
+    const p = minP + (range * t) / ticks;
+    const y = yOf(p);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(width - padR, y);
+    ctx.globalAlpha = 0.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillText(p.toFixed(1), padL - 6, y + 3);
+  }
+
+  candles.forEach((c, i) => {
+    const x = xOf(i);
+    const up = c.c >= c.o;
+    ctx.strokeStyle = ctx.fillStyle = up ? '#26a69a' : '#ef5350';
+    ctx.beginPath();
+    ctx.moveTo(x, yOf(c.h));
+    ctx.lineTo(x, yOf(c.l));
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    const yOpen = yOf(c.o), yClose = yOf(c.c);
+    const top = Math.min(yOpen, yClose);
+    const h = Math.max(1, Math.abs(yClose - yOpen));
+    ctx.fillRect(x - bodyW / 2, top, bodyW, h);
+  });
+
+  trades.forEach(t => {
+    if (t.step >= n) return;
+    const x = xOf(t.step);
+    const y = yOf(t.price);
+    ctx.fillStyle = t.side === 'buy' ? '#26a69a' : '#ef5350';
+    ctx.beginPath();
+    if (t.side === 'buy') {
+      ctx.moveTo(x, y + 9); ctx.lineTo(x - 5, y + 18); ctx.lineTo(x + 5, y + 18);
+    } else {
+      ctx.moveTo(x, y - 9); ctx.lineTo(x - 5, y - 18); ctx.lineTo(x + 5, y - 18);
+    }
+    ctx.closePath();
+    ctx.fill();
+  });
+}
+
+function drawEquity(id, equity, startingCash) {
+  const { ctx, width, height } = setupCanvas(id, 180);
+  const padL = 60, padR = 10, padT = 10, padB = 20;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const minE = Math.min(...equity, startingCash);
+  const maxE = Math.max(...equity, startingCash);
+  const range = (maxE - minE) || 1;
+
+  const yOf = e => padT + plotH - ((e - minE) / range) * plotH;
+  const xOf = i => padL + (i / (equity.length - 1 || 1)) * plotW;
+
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--muted');
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  [minE, startingCash, maxE].forEach(e => {
+    const y = yOf(e);
+    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--border');
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(width - padR, y);
+    ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillText('$' + e.toFixed(0), padL - 6, y + 3);
+  });
+
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  equity.forEach((e, i) => {
+    const x = xOf(i), y = yOf(e);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+window.addEventListener('resize', () => {
+  // no-op: re-load the file to redraw at new size (kept simple/self-contained)
+});
+</script>
+</body>
+</html>

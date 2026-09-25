@@ -1,0 +1,14 @@
+# core (needed for everything, already used in the demo)
+numpy
+pandas
+matplotlib
+scikit-learn
+requests
+
+# optional: real market data connectors
+# python-binance      # if you'd rather use a wrapped client than raw REST calls
+
+# optional: deep-RL upgrade (agents/sb3_agent.py)
+gymnasium
+stable-baselines3
+torch
